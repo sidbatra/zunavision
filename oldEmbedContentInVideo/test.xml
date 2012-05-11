@@ -1,0 +1,11 @@
+<video name="2" ext=".jpg" format=".wmv">
+
+    <content id="0" name="pepsi" ext=".jpg" rType="2" cType="1" tType="3" startF="0" endFF="-1" endFB="-1" />
+
+    <frame id="0">
+        <contentT id="0" cid="0">
+                <poly n="4" x0="423" y0="49" x1="590" y1="51" x2="593" y2="219" x3="412" y3="221"  />
+       </contentT>
+    </frame>
+
+</video>

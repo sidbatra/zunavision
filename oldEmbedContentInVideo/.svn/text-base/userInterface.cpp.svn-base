@@ -1,0 +1,1008 @@
+/*****************************************************************************
+** MOVIE PROJECT
+** Copyright (c) 2008 
+**
+** FILENAME:    userInterface.cpp
+** AUTHOR(S):   Sid Batra <sidbatra@cs.stanford.edu>
+** DESCRIPTION:
+** Implementations of the functions in userInterface.h
+*****************************************************************************/
+#include "userInterface.h"
+
+
+
+//************ Macros ***************
+
+#define NOT_IMPLEMENTED_YET wxMessageBox(_T("Functionality not implementet yet."),\
+					 _T("Error"), wxOK | wxICON_EXCLAMATION, this);
+
+
+//************ Global Variables ************
+
+
+MainWindow *gMainWindow = NULL;
+
+
+//************ Constants ************
+const wxSize DEFAULT_WINDOW_SIZE = wxSize(1200,800);
+const wxSize DEFAULT_CANVAS_SIZE = wxSize(300,200);
+const wxSize TRACKBAR_SIZE = wxSize(500,30);//(700,30);
+const int TRACKBAR_MARGIN = 77;
+const wxSize LISTBOX_SIZE = wxSize(100, 300);
+const int LISTBOX_MARGIN = 10;
+const wxSize CLISTBOX_SIZE = wxSize(100, 200);
+const int CLISTBOX_MARGIN = 75;
+
+
+
+static const wxCmdLineEntryDesc COMMAND_LINE_DESCRIPTION[] =
+{
+    { wxCMD_LINE_OPTION, "videodir", "videofolder", "automatically loads the video folder" },
+    { wxCMD_LINE_OPTION, "outputmd", "outputfilename", "output filename for the metadata" },
+    { wxCMD_LINE_OPTION, "content", "contentfilename", "name of the content" },
+    { wxCMD_LINE_OPTION, "ext", "contentextension", "extension of the content" },
+    { wxCMD_LINE_OPTION, "fps", "video", "frames per second in the video" },
+    { wxCMD_LINE_OPTION, "label", "userlabel", "label of the surface" },
+
+    { wxCMD_LINE_NONE }
+};
+
+// Event Tables ----------------------------------------------------------------
+
+BEGIN_EVENT_TABLE(MainCanvas, wxWindow)
+    EVT_ERASE_BACKGROUND(MainCanvas::on_erase_background)
+    EVT_SIZE(MainCanvas::on_size)
+    EVT_PAINT(MainCanvas::on_paint)
+    EVT_CHAR(MainCanvas::on_key)
+    EVT_MOUSE_EVENTS(MainCanvas::on_mouse)
+
+    EVT_TIMER(PLAY_TIMER_ID, MainCanvas::on_timer)
+END_EVENT_TABLE()
+
+
+BEGIN_EVENT_TABLE(MainWindow, wxFrame)
+    EVT_CLOSE(MainWindow::on_close)
+
+    //EVT_MENU(FILE_NEW, MainWindow::on_file_menu)
+    //EVT_MENU(FILE_OPEN, MainWindow::on_file_menu)
+    //EVT_MENU(FILE_OPEN_SEQUENCE, MainWindow::on_file_menu)
+    //EVT_MENU(FILE_OPEN_DIRECTORY, MainWindow::on_file_menu)
+    EVT_MENU(FILE_OPEN_VIDEO, MainWindow::on_file_menu)
+    EVT_MENU(FILE_SAVE_TRACKS, MainWindow::on_file_menu)
+    EVT_MENU(FILE_LOAD_TRACKS, MainWindow::on_file_menu)
+    EVT_SIZE(MainWindow::on_size)
+    //EVT_MENU(FILE_SAVE, MainWindow::on_file_menu)
+    //EVT_MENU(FILE_SAVEAS, MainWindow::on_file_menu)
+    //EVT_MENU(FILE_IMPORT, MainWindow::on_file_menu)
+    //EVT_MENU(FILE_EXIT, MainWindow::on_file_menu)
+    
+
+    EVT_MENU(OPTIONS_ISBMP, MainWindow::on_options_menu)
+    EVT_MENU(OPTIONS_ENDFRAME, MainWindow::on_options_menu)
+    EVT_MENU(OPTIONS_REVERSEENDFRAME, MainWindow::on_options_menu)
+    EVT_MENU(OPTIONS_DELAY, MainWindow::on_options_menu)
+    EVT_MENU(OPTIONS_GOTO, MainWindow::on_options_menu)
+    EVT_MENU(OPTIONS_SAVEMETA, MainWindow::on_options_menu)
+    
+    EVT_MENU(HELP_ABOUT, MainWindow::on_help_menu)
+END_EVENT_TABLE()
+
+// MainCanvas Implementation ---------------------------------------------------
+
+MainCanvas::MainCanvas(wxWindow *parent, wxWindowID id,const wxPoint& pos,
+    const wxSize& size, long style, const wxString& name) :  wxWindow(parent, id, pos, size, style, name) ,_playTimer(this,PLAY_TIMER_ID)
+{
+    
+    _image = wxImage(DEFAULT_CANVAS_SIZE.x,DEFAULT_CANVAS_SIZE.y);
+       
+    _currentFrame = -1;
+    _isDrawing = 0;
+    _dragMode = 0;
+    _dragIndex = 0;
+    _extension = ".jpg";
+    _delay = 30;
+    
+}
+
+MainCanvas::~MainCanvas()
+{
+    _currentFrame = -1;
+    _isDrawing = 0;
+    _dragMode = 0;
+   _dragIndex = 0;
+    _extension = ".jpg";
+    _delay = 30;
+}
+
+void MainCanvas::on_erase_background(wxEraseEvent &event)
+{
+    // do nothing (and avoid flicker)
+}
+
+
+//Loads the frames from the video into the viewer
+void MainCanvas::loadVideo(const char *path)
+{   
+    _videoFrameNames.clear();
+
+    _currentFrame = -1;
+
+    //Read and cache all video frame names
+    DIR *dir = opendir(path);
+
+    struct dirent *e = readdir(dir);
+    
+    while( e != NULL )
+    {
+        if(strstr(e->d_name, _extension.c_str()))
+        {
+            string temp = string(path) + string("//") + string(e->d_name);
+            _videoFrameNames.push_back(temp);        
+        }
+        e = readdir(dir);
+    } 
+
+	sort(_videoFrameNames.begin(),_videoFrameNames.end());
+
+    ((MainWindow *)GetParent())->SetStatusText(wxString::Format("%d frames read", _videoFrameNames.size()));
+
+    displayFrame(0);
+
+
+    ((MainWindow *)GetParent())-> _frameTracker->SetRange(0,(int)_videoFrameNames.size()-1);
+    ((MainWindow *)GetParent())-> _frameTracker->SetValue(0);
+    ((MainWindow *)GetParent())->_selectedFrameBox->Clear();
+    ((MainWindow *)GetParent())->_contentFrameBox->Clear();
+    _contentData.clear();
+
+    
+    //Frame filtering code goes here
+    vector<int> sampledFrames = _frameSampler.sampleFrames(_videoFrameNames);
+
+    //Populate list box with filtered list of frames
+    for( int i=0 ; i<(int)sampledFrames.size() ; i++)
+    {
+        string name = utilities::toString(sampledFrames[i]);
+        ((MainWindow *)GetParent())->_selectedFrameBox->Append(name.c_str());
+    }
+
+
+}
+
+
+void MainCanvas::displayFrame(int index)
+{
+    //If video frame is within range
+    if( index >= 0 && index < (int)_videoFrameNames.size() )
+    {
+
+        IplImage *imgPtr = cvLoadImage(_videoFrameNames[index].c_str(),CV_LOAD_IMAGE_COLOR);
+	_videoWidth=imgPtr->width;
+	_videoHeight=imgPtr->height;
+	//utilities::resizeInPlace(&imgPtr,imgPtr->height * 2 ,imgPtr->width * 2);
+        
+        if (_imageData != NULL) 
+        {
+            delete[] _imageData;
+            _imageData = NULL;
+        }
+            
+        // copy frame into image (BGR format to RGB format)
+        if (_imageData == NULL) 
+        {
+	        _imageData = new unsigned char[3 * imgPtr->width * imgPtr->height];
+            
+            _image.Destroy();
+            _image = wxImage(imgPtr->width, imgPtr->height);
+            SetSize(imgPtr->width, imgPtr->height);
+
+        }
+        
+      
+        for (int y = 0; y < imgPtr->height; y++) 
+        {
+           int yy = y;
+
+            for (int x = 0; x < imgPtr->width; x++) 
+            {
+             _imageData[3 * (yy * imgPtr->width + x) + 0] = imgPtr->imageData[y * imgPtr->widthStep + 3 * x + 2];
+             _imageData[3 * (yy * imgPtr->width + x) + 1] = imgPtr->imageData[y * imgPtr->widthStep + 3 * x + 1];
+             _imageData[3 * (yy * imgPtr->width + x) + 2] = imgPtr->imageData[y * imgPtr->widthStep + 3 * x + 0];
+            }
+        }
+            
+        _image.SetData(_imageData, true);
+        
+       
+        ((wxFrame *)GetParent())->SetStatusText(wxString::Format("Frame %d [%s]",index, _videoFrameNames[index].c_str()));
+        
+            
+        _currentFrame = index;
+
+        cvReleaseImage(&imgPtr);
+        this->Refresh(false);
+        this->Update();
+    
+    }//if valid
+    else
+    {
+        _playTimer.Stop();
+        ((MainWindow*)((wxFrame *)GetParent()))->_frameTracker->SetValue(_currentFrame);
+
+    }
+
+    
+}
+
+
+//Retrieves the current extension
+string MainCanvas::getExtension()
+{
+    return _extension;
+}
+
+//Set extension
+void MainCanvas::setExtension(string ext)
+{
+    _extension = ext;
+}
+
+
+void MainCanvas::on_paint(wxPaintEvent &WXUNUSED(event))
+{
+    int width, height;
+    GetClientSize(&width, &height);
+
+    wxPaintDC dc(this);
+    
+    if( _currentFrame == -1)
+    {
+        dc.Clear();
+        dc.SetTextForeground(wxColor(0, 0, 255));
+        wxSize s = dc.GetTextExtent("Load a video from the file menu");
+        dc.DrawText("Load a video from the file menu", (int)(width - s.x)/2, (int)(height - s.y)/2);
+    }
+    else
+    {        
+        dc.DrawBitmap(_image.Scale(width, height), 0, 0);
+
+        if( _currentFrame != -1 )
+        {
+            dc.SetPen(wxPen(wxColor(255,0, 0),1));
+		int radius = 5;
+            
+            if( _isDrawing )
+            {
+                int size = (int)_currentContent.points.size();
+
+		if ( size == 4 )
+		{
+                 for( int i=1 ; i<(int)_currentContent.points.size() ; i++)
+		 {
+                    dc.DrawLine(_currentContent.points[i-1].x , _currentContent.points[i-1].y
+                    ,_currentContent.points[i].x,_currentContent.points[i].y);
+		 //  dc.DrawCircle( wxPoint(_currentContent.points[i].x,_currentContent.points[i].y),radius);
+		 }
+		
+                 dc.DrawLine(_currentContent.points[size-1].x , _currentContent.points[size-1].y
+                 ,_currentContent.points[0].x , _currentContent.points[0].y);
+		  // dc.DrawCircle( wxPoint(_currentContent.points[0].x,_currentContent.points[0].y),radius);
+		}
+		else
+		{
+		
+                for( int i=1 ; i<(int)_currentContent.points.size() ; i++)
+		{
+                    dc.DrawLine(_currentContent.points[i-1].x , _currentContent.points[i-1].y
+                    ,_currentContent.points[i].x,_currentContent.points[i].y);
+		
+		  // dc.DrawCircle( wxPoint(_currentContent.points[i].x,_currentContent.points[i].y),radius);
+  		}
+
+
+                dc.DrawLine(_currentContent.points[size-1].x , _currentContent.points[size-1].y
+                    , _mousePoint.x, _mousePoint.y);
+		//dc.DrawCircle( wxPoint(_mousePoint.x,_mousePoint.y),radius);
+
+                if( _currentContent.points.size() == 3 )
+		{
+                    dc.DrawLine(_currentContent.points[0].x , _currentContent.points[0].y
+                    , _mousePoint.x, _mousePoint.y);
+			
+		}
+		  // dc.DrawCircle( wxPoint(_currentContent.points[0].x,_currentContent.points[0].y),radius);
+
+		}		
+
+            }
+            else
+            {
+                int isFound = 0;
+
+                //Search for any content on the current frame
+                contentData temp = contentData::getContentDataForFrame(_currentFrame,_contentData,isFound);
+
+                //if content is found
+                if( isFound )
+                {
+                    for( unsigned i=1 ; i<temp.points.size() ; i++)
+                        dc.DrawLine(temp.points[i-1].x , temp.points[i-1].y 
+                        ,temp.points[i].x   , temp.points[i].y );
+
+                    dc.DrawLine(temp.points[temp.points.size()-1].x  , temp.points[temp.points.size()-1].y  
+                        ,temp.points[0].x  , temp.points[0].y  );
+                }
+
+            }
+        }
+    }
+
+}
+
+
+void MainCanvas::on_size(wxSizeEvent &event)
+{
+    int width, height;
+
+    GetClientSize(&width, &height);
+    _scaleX = (double)width / (double)_image.GetWidth();
+    _scaleY = (double)height / (double)_image.GetHeight();
+
+    this->Refresh(false);
+    this->Update();
+}
+
+void MainCanvas::on_key(wxKeyEvent &event)
+{
+    //svlObject2dFrame *frame = this->getCurrentFrame();
+
+   switch (event.m_keyCode) 
+   {
+   case WXK_SPACE:
+       if( _playTimer.IsRunning() )
+       {
+           _playTimer.Stop();
+           ((MainWindow*)((wxFrame *)GetParent()))->_frameTracker->SetValue(_currentFrame);
+       }
+       else
+           _playTimer.Start(_delay);
+    case WXK_LEFT:
+        
+        if(_currentFrame > 0 )
+        {
+            displayFrame(_currentFrame-1);
+            ((MainWindow*)((wxFrame *)GetParent()))->_frameTracker->SetValue(_currentFrame-1);
+        }
+        break;
+    case WXK_RIGHT:
+        if(_currentFrame != -1 && _currentFrame < (int)_videoFrameNames.size() -1 )
+        {
+            displayFrame(_currentFrame+1);
+            ((MainWindow*)((wxFrame *)GetParent()))->_frameTracker->SetValue(_currentFrame+1);
+
+        }    
+        break;
+        
+   }
+    //case WXK_ESCAPE:
+	   // Close();
+    //	break;
+    //case WXK_DELETE:
+    //    if (_index != -1) {
+    //        if ((frame != NULL) && (_activeObject != -1)) {
+    //            frame->erase(frame->begin() + _activeObject);
+    //        } else if (frame != NULL) {
+    //            wxMessageDialog dlg(this, _T("Delete all objects in this frame?"),
+    //                _T("Confirm"), wxYES_NO | wxICON_QUESTION);
+    //            if (dlg.ShowModal() == wxID_YES) {
+    //                frame->clear();
+    //            }
+    //        }
+    //    }
+    //    break;
+    //case WXK_INSERT:
+    //    // TO DO: don't copy repeated objects
+    //    {
+    //        svlObject2dFrame *prevFrame = this->getCurrentFrame(-1);
+    //        if (prevFrame != NULL) {
+    //            if (frame == NULL) {
+    //                _objects[strBaseName(_imageSequence[_index])] = *prevFrame;
+    //            } else {
+    //                frame->insert(frame->end(), prevFrame->begin(), prevFrame->end());
+    //            }
+    //        }
+    //    }
+    //    break;
+    //case ' ':
+    //    nextFrame();
+    //    break;
+    //case 'p':
+    //    _playTimer.Start(33);
+    //    break;
+    //case '-':
+    //case '_':
+    //    if ((_activeObject != -1) && (frame != NULL) &&
+    //        ((*frame)[_activeObject].w > 2.0) &&
+    //        ((*frame)[_activeObject].h > 2.0)) {
+    //        (*frame)[_activeObject].x += 1.0;
+    //        (*frame)[_activeObject].y += 1.0;
+    //        (*frame)[_activeObject].w -= 2.0;
+    //        (*frame)[_activeObject].h -= 2.0;
+    //    }
+    //    break;
+    //case '+':
+    //case '=':
+    //    if (_activeObject != -1) {
+    //        (*frame)[_activeObject].x -= 1.0;
+    //        (*frame)[_activeObject].y -= 1.0;
+    //        (*frame)[_activeObject].w += 2.0;
+    //        (*frame)[_activeObject].h += 2.0;
+    //    }
+    //    break;
+    //default:
+    //	event.Skip();
+    //}
+
+    //// refresh view
+    //this->Refresh(false);
+    //this->Update();
+}
+
+void MainCanvas::on_mouse(wxMouseEvent &event)
+{
+        
+    if ( _currentFrame == -1 )
+        return;
+
+    
+    if (event.LeftUp() && _isDrawing == 1) 
+    {   
+	if( _currentContent.points.size() < 4 )
+        _currentContent.points.push_back(wxPoint(event.m_x, event.m_y));    
+	else
+	{
+	   if( _dragMode == 1 )
+		_dragMode = 0;
+	   else
+	   {	
+  		int radius = 5;
+
+	   	for( unsigned i=0 ; i<_currentContent.points.size() ; i++)
+			if( abs(event.m_x - _currentContent.points[i].x) < radius && abs(event.m_y - _currentContent.points[i].y) < radius )
+			{
+				_dragIndex = i;
+				_dragMode = 1;
+				break;
+			}
+		    
+		
+	   }
+		
+	}
+
+	
+
+        /*if( _currentContent.points.size() == 4 )
+        {
+            wxTextEntryDialog dlgContent(this, "Enter content type (integer):");
+
+            wxTextEntryDialog dlgRender(this, "Enter rendering type (integer):");
+
+            wxTextEntryDialog dlgTrack(this, "Enter tracking type (integer):");
+            
+	    wxTextEntryDialog dlgOcc(this, "Enter occlusion type (integer):");
+            
+
+            if ( dlgContent.ShowModal() == wxID_OK &&  dlgRender.ShowModal() == wxID_OK && dlgTrack.ShowModal() == wxID_OK && dlgOcc.ShowModal() == wxID_OK)
+            {
+                _currentContent.contentName = contentName; //string(dlgName.GetValue().c_str());
+                _currentContent.contentType = atoi(dlgContent.GetValue().c_str());;
+                _currentContent.renderType = atoi(dlgRender.GetValue().c_str());;
+                _currentContent.trackType = atoi(dlgTrack.GetValue().c_str());
+                _currentContent.occType = atoi(dlgOcc.GetValue().c_str());
+                _currentContent.contentExtension = contentExt;//string(".jpg");
+                _currentContent.startingFrame = _currentFrame;
+                _contentData.push_back(_currentContent);
+
+                string temp = utilities::toString( _currentContent.startingFrame );
+               ((MainWindow*)((wxFrame *)GetParent()))->_contentFrameBox->Append(temp.c_str() );
+                
+            }
+
+            _isDrawing = 0;
+            _currentContent.points.clear();
+        }*/
+    } 
+    else if (event.LeftDown() && _isDrawing == 0) 
+    {
+        
+        _currentContent.points.push_back(wxPoint(event.m_x, event.m_y));
+        
+    } 
+    else if (event.Moving()) 
+    {
+        if( _currentContent.points.size() == 1 )
+            _isDrawing = 1;
+
+        if( _isDrawing )
+            _mousePoint = wxPoint(event.m_x, event.m_y);                           
+
+	if( _dragMode )
+		_currentContent.points[_dragIndex] = wxPoint(event.m_x,event.m_y);
+    }
+    else if(event.RightDown() )
+    {
+        if( _isDrawing == 1 )
+        {
+            if( _currentContent.points.size() > 1  )
+                _currentContent.points.erase( _currentContent.points.end() -1 );
+            else
+            {
+                _isDrawing = 0;
+                _currentContent.points.clear();
+
+            }
+        }
+        else
+        {
+            int index = contentData::isContentAtIndex(_contentData,_currentFrame);
+            
+            if( index != -1 )
+            {
+                _contentData.erase(_contentData.begin() + index);
+
+                ((MainWindow*)((wxFrame *)GetParent()))->_contentFrameBox->Clear();
+                
+                //Populate list box
+                for( unsigned i=0 ; i<_contentData.size() ; i++)
+                {
+                    string temp = utilities::toString( _contentData[i].startingFrame );
+                    ((MainWindow*)((wxFrame *)GetParent()))->_contentFrameBox->Append(temp.c_str() );
+                }
+                
+                wxMessageBox(_T("Content region succesfully removed"),_T("Done"), wxOK | wxICON_EXCLAMATION, this);
+            }
+        }
+    }
+    //else if (event.Dragging()&& _mouseMode == MM_MOVE)
+    //{
+    //   _mouseDownPoint = wxPoint(event.m_x, event.m_y);                               
+    //}
+
+    event.Skip();
+    this->Refresh(false);
+    this->Update();
+}
+
+
+void MainCanvas::on_timer(wxTimerEvent& event)
+{
+    displayFrame(_currentFrame+1);
+}
+
+
+
+
+//******************************************* MainWindow ************************************
+
+MainWindow::MainWindow(wxWindow* parent, wxWindowID id, const wxString& title,
+    const wxPoint& pos, const wxSize& size, long style) : 
+    wxFrame(parent, id, title, pos, size, style)
+{
+    wxMenu *file_menu = new wxMenu;
+    wxMenu *options_menu = new wxMenu;
+    wxMenu *help_menu = new wxMenu;
+   
+    file_menu->Append(FILE_OPEN_VIDEO, _T("Open &Video...\tCtrl-V"), _T("Open video file"));
+    file_menu->Append(FILE_LOAD_TRACKS , _T("Load &Tracks...\tCtrl-O"), _T("Load track file"));
+    file_menu->Append(FILE_SAVE_TRACKS, _T("Save &Tracks...\tCtrl-S"), _T("Save track file"));
+    
+    
+    //file_menu->AppendSeparator();
+    options_menu->AppendCheckItem(OPTIONS_ISBMP, _T("is .bmp\tCtrl-X"), _T("Uncheck if the video frame extension is not bmp (and is jpg)"));
+    options_menu->Append(OPTIONS_ENDFRAME, _T("Mark as end frame\tCtrl-E"), _T("Sets current frame as end frame for last tracker"));
+    options_menu->Append(OPTIONS_REVERSEENDFRAME, _T("Mark as reverse end frame\tCtrl-R"), _T("Sets current frame as reverse end frame for next tracker"));
+    options_menu->Append(OPTIONS_DELAY, _T("Delay for movie\tCtrl-D"), _T("Prompts dialog box to change delay between frames"));
+    options_menu->Append(OPTIONS_GOTO, _T("Goto frame\tCtrl-G"), _T("Prompts dialog box to directly jump to a frame"));
+    options_menu->Append(OPTIONS_SAVEMETA, _T("Save meta data\tCtrl-M"), _T("Save currently drawn meta information"));
+   
+    help_menu->Append(HELP_ABOUT, _T("&About...\tF1"), _T("Show about dialog"));
+
+    wxMenuBar *menu_bar = new wxMenuBar();
+    menu_bar->Append(file_menu, _T("&File"));
+    menu_bar->Append(options_menu, _T("&Options"));
+    menu_bar->Append(help_menu, _T("&Help"));
+    SetMenuBar(menu_bar);
+    
+
+    options_menu->Check(OPTIONS_ISBMP, true);
+    CreateStatusBar();
+
+    //Setup trackbar    
+    _frameTracker = new wxSlider(this,TRACKER_FRAME_SELECTOR,0,0,255,wxPoint(1,size.GetHeight()-TRACKBAR_SIZE.GetHeight()-TRACKBAR_MARGIN),TRACKBAR_SIZE,wxSL_HORIZONTAL);
+    Connect(TRACKER_FRAME_SELECTOR, wxEVT_COMMAND_SLIDER_UPDATED,wxScrollEventHandler(MainWindow::on_track));
+    
+
+    //Setup frames list box
+    _selectedFrameBox = new wxListBox(this,BOX_FRAME_SELECTOR,wxPoint(size.GetWidth() - LISTBOX_SIZE.GetWidth() - LISTBOX_MARGIN
+        , 1) , LISTBOX_SIZE );
+    Connect(BOX_FRAME_SELECTOR, wxEVT_COMMAND_LISTBOX_SELECTED, wxCommandEventHandler(MainWindow::on_boxClick));
+
+    //Setup content list box
+    _contentFrameBox = new wxListBox(this,BOX_CONTENT_SELECTOR,wxPoint(size.GetWidth() - CLISTBOX_SIZE.GetWidth() - LISTBOX_MARGIN
+        , size.GetHeight() - CLISTBOX_SIZE.GetHeight() - CLISTBOX_MARGIN) , CLISTBOX_SIZE );
+    Connect(BOX_CONTENT_SELECTOR, wxEVT_COMMAND_LISTBOX_SELECTED, wxCommandEventHandler(MainWindow::on_contentBoxClick));
+
+    // this is required for keyboard focus under Linux
+    _canvas = new MainCanvas(this);
+
+    
+}
+
+
+
+
+MainWindow::~MainWindow()
+{
+    // do nothing
+}
+
+void MainWindow::on_file_menu(wxCommandEvent& event)
+{
+    if (event.GetId() == FILE_OPEN_VIDEO) 
+    {
+        wxDirDialog dlg(this, _T("Choose video dir to open"), _T(""), 
+	    wxDD_DIR_MUST_EXIST | wxDD_DEFAULT_STYLE | wxFD_CHANGE_DIR);
+        if (dlg.ShowModal() == wxID_OK) 
+        {
+            string temp = string(dlg.GetPath());
+            _canvas->loadVideo(temp.c_str());
+					 
+        }
+    } 
+    else if(event.GetId() == FILE_SAVE_TRACKS)
+    {
+       // wxFileDialog dlg(this, _T("Enter filename for saving tracks"), _T(""), 
+	//    _T(""), _T("TEXT files (*.txt)|*.txt"), wxSAVE | wxFD_CHANGE_DIR);
+
+        //if (dlg.ShowModal() == wxID_OK) 
+        //{
+	        string filename = _canvas->outputFilename;// string(dlg.GetPath().c_str());
+            contentData::saveContentData(_canvas->_contentData,filename,_canvas->_extension);
+	
+            wxMessageBox(_T("Meta data saved"),_T("Done"), wxOK | wxICON_EXCLAMATION, this);
+     //   }
+    }
+    else if(event.GetId() == FILE_LOAD_TRACKS)
+    {
+        wxFileDialog dlg(this, _T("Enter filename for loading tracks"), _T(""), 
+	    _T(""), _T("TEXT files (*.txt)|*.txt"), wxOPEN | wxFD_CHANGE_DIR);
+
+        if (dlg.ShowModal() == wxID_OK) 
+        {
+	        string filename = string(dlg.GetPath().c_str());
+            contentData::loadContentData(_canvas->_contentData,filename,_canvas->_extension);
+            _contentFrameBox->Clear();
+
+            //Populate list box
+            for( unsigned i=0 ; i<_canvas->_contentData.size() ; i++)
+            {
+                string temp = utilities::toString( _canvas->_contentData[i].startingFrame );
+                _contentFrameBox->Append(temp.c_str() );
+            }
+
+
+        }
+    }
+    
+
+    Refresh(false);
+    Update();
+}
+
+
+void MainWindow::on_options_menu(wxCommandEvent& event)
+{
+    if (event.GetId() == OPTIONS_ISBMP) 
+    {
+
+        if( _canvas->getExtension() == ".bmp" )
+        {            
+            _canvas->setExtension(string(".jpg"));
+        }
+        else
+        {         
+            _canvas->setExtension(string(".bmp"));
+        }
+        
+     }
+    else if(event.GetId() == OPTIONS_ENDFRAME)
+    {
+        int index = contentData::checkClosestContent(_canvas->_contentData ,_canvas->_currentFrame);
+
+        if( index != -1 )
+        {   
+            wxMessageBox(_T("End frame succesfully paired to content region"),_T("Done"), wxOK | wxICON_EXCLAMATION, this);
+            _canvas->_contentData[index].endingFrame = _canvas->_currentFrame;
+        }
+        else
+        {
+            wxMessageBox(_T("No content region found before this frame"),_T("Error"), wxOK | wxICON_EXCLAMATION, this);            
+        }
+    }
+    else if(event.GetId() == OPTIONS_REVERSEENDFRAME)
+    {
+        int index = contentData::checkClosestContentForward(_canvas->_contentData ,_canvas->_currentFrame);
+
+        if( index != -1 )
+        {   
+            wxMessageBox(_T("Reverse End frame succesfully paired to content region"),_T("Done"), wxOK | wxICON_EXCLAMATION, this);
+            _canvas->_contentData[index].reverseEndingFrame = _canvas->_currentFrame;
+        }
+        else
+        {
+            wxMessageBox(_T("No content region found before this frame"),_T("Error"), wxOK | wxICON_EXCLAMATION, this);            
+        }
+    }
+    else if(event.GetId() == OPTIONS_DELAY)
+    {
+        wxTextEntryDialog dlg(this, "Enter delay (integer):");
+          
+        if (dlg.ShowModal() == wxID_OK )
+        {
+            _canvas->_delay = atoi(dlg.GetValue().c_str());
+        }
+    }
+    else if(event.GetId() == OPTIONS_GOTO)
+    {
+        wxTextEntryDialog dlg(this, "Enter frame number (integer):");
+          
+        if (dlg.ShowModal() == wxID_OK )
+        {
+            int index = atoi(dlg.GetValue().c_str());
+
+            if( index > -1 && index < (int)_canvas->_videoFrameNames.size() )
+            {
+                _canvas->displayFrame(index);
+                _frameTracker->SetValue(index);
+            }
+        }
+    }
+    else if(event.GetId() == OPTIONS_SAVEMETA)
+    {
+	if( _canvas->_currentContent.points.size() == 4 )
+        {
+            wxTextEntryDialog dlgContent(this, "Enter content type (integer):");
+            wxTextEntryDialog dlgRender(this, "Enter rendering type (integer):");
+            wxTextEntryDialog dlgTrack(this, "Enter tracking type (integer):");
+            wxTextEntryDialog dlgOcc(this, "Enter occlusion type (integer):");
+
+
+            if ( dlgContent.ShowModal() == wxID_OK &&  dlgRender.ShowModal() == wxID_OK && dlgTrack.ShowModal() == wxID_OK && dlgOcc.ShowModal() == wxID_OK)
+            {
+               _canvas->_currentContent.contentName = _canvas->contentName; //string(dlgName.GetValue().c_str());
+               _canvas->_currentContent.contentType = atoi(dlgContent.GetValue().c_str());;
+               _canvas->_currentContent.renderType = atoi(dlgRender.GetValue().c_str());;
+               _canvas->_currentContent.trackType = atoi(dlgTrack.GetValue().c_str());
+               _canvas-> _currentContent.occType = atoi(dlgOcc.GetValue().c_str());
+               _canvas-> _currentContent.contentExtension = _canvas->contentExt;//string(".jpg");
+               _canvas-> _currentContent.startingFrame = _canvas->_currentFrame;
+               _canvas-> _contentData.push_back(_canvas->_currentContent);
+
+                string temp = utilities::toString( _canvas->_currentContent.startingFrame );
+               _contentFrameBox->Append(temp.c_str() );
+
+            }
+
+            _canvas->_isDrawing = 0;
+            _canvas->_currentContent.points.clear();
+        }
+
+    }
+
+    
+    Refresh(false);
+    Update();
+}
+
+void MainWindow::on_help_menu(wxCommandEvent& event)
+{
+    if (event.GetId() == HELP_ABOUT) 
+    {
+        wxAboutDialogInfo info;
+        info.SetName(_T("embedContentInVideo"));
+        info.SetVersion(_T("0.7"));
+        info.SetDescription(_T("Embed different types of ad content in videos."));
+        info.SetCopyright(_T("(C) 2008 Movie Project"));
+        wxAboutBox(info);
+    }
+}
+
+void MainWindow::on_close(wxCloseEvent& event)
+{
+    // not implemented yet
+    event.Skip();
+}
+
+void MainWindow::on_size(wxSizeEvent &event)
+{
+    if( _canvas != NULL )
+    {
+        wxSize currentSize = this->GetSize();
+
+        if( _canvas->_imageData == NULL )
+            _canvas->SetSize(DEFAULT_CANVAS_SIZE);            
+        else
+            _canvas->SetSize(wxSize(_canvas->_image.GetWidth(),_canvas->_image.GetHeight()));  
+
+        _frameTracker->SetPosition(wxPoint(1,currentSize.GetHeight()-TRACKBAR_SIZE.GetHeight()-TRACKBAR_MARGIN));
+        _selectedFrameBox->SetPosition( wxPoint(currentSize.GetWidth() - LISTBOX_SIZE.GetWidth() - LISTBOX_MARGIN, 1) );
+        _contentFrameBox->SetPosition( wxPoint(currentSize.GetWidth() - CLISTBOX_SIZE.GetWidth() - LISTBOX_MARGIN
+        , currentSize.GetHeight() - CLISTBOX_SIZE.GetHeight() - CLISTBOX_MARGIN) );
+    }
+
+
+}
+
+void MainWindow::on_track(wxScrollEvent& event)
+{
+   int pos = _frameTracker->GetValue();
+
+   if( _canvas->_currentFrame != -1 )
+       _canvas->displayFrame(pos);
+}
+
+//Handles click on one of the selected frames
+void MainWindow::on_boxClick(wxCommandEvent& event)
+{
+    int selection = _selectedFrameBox->GetSelection();
+    
+    //Display the frame corresponding to the selection
+    if (selection != -1) 
+    {
+        string temp =  string(_selectedFrameBox->GetString(selection).c_str());
+        int index = atoi(temp.c_str());
+        _canvas->displayFrame(index);
+
+        //Also update the trackbar position to reflect the change
+       _frameTracker->SetValue(index);
+    }
+
+}
+
+void MainWindow::on_contentBoxClick(wxCommandEvent& event)
+{
+    int selection = _contentFrameBox->GetSelection();
+
+    
+    //Display the frame corresponding to the selection
+    if (selection != -1) 
+    {
+        string temp =  string(_contentFrameBox->GetString(selection).c_str());
+        int index = atoi(temp.c_str());
+        _canvas->displayFrame( index);
+        _frameTracker->SetValue(index);
+    }    
+}
+
+
+
+//*********************************** userInterface *********************************8
+
+bool userInterface::OnInit()
+{
+    
+    // setup main window
+    gMainWindow = new MainWindow(NULL, wxID_ANY, wxT("ZunaVision"),
+        wxDefaultPosition, wxSize(DEFAULT_WINDOW_SIZE));
+    
+    SetTopWindow(gMainWindow);
+    gMainWindow->Show();
+    gMainWindow->SetFocus();    
+       
+    // call base class for command-line options
+    wxApp::OnInit();
+   
+
+    return true;
+}
+
+
+void userInterface::OnInitCmdLine(wxCmdLineParser& parser)
+{
+    parser.SetDesc(COMMAND_LINE_DESCRIPTION);
+    if (parser.Parse(true)) {
+	exit(1);
+    }
+
+   int fps=0;
+
+    wxString str;
+    if (parser.Found("videodir", &str)) 
+    {
+	gMainWindow->_canvas->loadVideo(str.c_str()); 
+    }
+
+    if (parser.Found("outputmd", &str)) 
+    {
+	gMainWindow->_canvas->outputFilename = string(str.c_str());
+	
+    }
+
+    if (parser.Found("content", &str)) 
+    {
+	gMainWindow->_canvas->contentName = string(str.c_str());
+	
+    }
+    if (parser.Found("ext", &str)) 
+    {
+	gMainWindow->_canvas->contentExt = string(str.c_str());
+    }
+
+    if (parser.Found("fps", &str)) 
+    {
+	fps = atoi(str.c_str());
+    }
+
+   if (parser.Found("label", &str)) 
+    {
+	string label = string(str.c_str());
+	vector<string> elems;
+	string del=";";
+	split(label,elems,del);
+	
+	int milisecs = atoi(elems[0].c_str());
+	int frame = (int)((milisecs * fps) /  1000.0);
+
+	int flashWidth = atoi(elems[9].c_str());
+	int flashHeight = atoi(elems[10].c_str());
+	
+
+	gMainWindow->_canvas->_currentContent.points.push_back(wxPoint(atoi(elems[1].c_str()),atoi(elems[2].c_str())));	
+	gMainWindow->_canvas->_currentContent.points.push_back(wxPoint(atoi(elems[3].c_str()),atoi(elems[4].c_str())));	
+	gMainWindow->_canvas->_currentContent.points.push_back(wxPoint(atoi(elems[5].c_str()),atoi(elems[6].c_str())));	
+	gMainWindow->_canvas->_currentContent.points.push_back(wxPoint(atoi(elems[7].c_str()),atoi(elems[8].c_str())));	
+
+	for( unsigned i=0 ; i<gMainWindow->_canvas->_currentContent.points.size() ; i++)
+	{
+		gMainWindow->_canvas->_currentContent.points[i].x = (int)((gMainWindow->_canvas->_currentContent.points[i].x * gMainWindow->_canvas->_videoWidth) / (flashWidth + 0.0));
+		gMainWindow->_canvas->_currentContent.points[i].y = (int)((gMainWindow->_canvas->_currentContent.points[i].y * gMainWindow->_canvas->_videoHeight) / (flashHeight + 0.0));
+	}
+	
+	gMainWindow->_canvas->_isDrawing = 1;
+	gMainWindow->_canvas->_currentFrame= frame;	
+	gMainWindow->_frameTracker->SetValue(frame);
+	gMainWindow->_canvas->displayFrame(frame);	
+    }
+	
+}
+
+void userInterface::split(string& str,
+                      vector<string>& tokens,
+                      string& delimiters)
+{
+    // Skip delimiters at beginning.
+    string::size_type lastPos = str.find_first_not_of(delimiters, 0);
+    // Find first "non-delimiter".
+    string::size_type pos     = str.find_first_of(delimiters, lastPos);
+
+    while (string::npos != pos || string::npos != lastPos)
+    {
+        // Found a token, add it to the vector.
+        tokens.push_back(str.substr(lastPos, pos - lastPos));
+        // Skip delimiters.  Note the "not_of"
+        lastPos = str.find_first_not_of(delimiters, pos);
+        // Find next "non-delimiter"
+        pos = str.find_first_of(delimiters, lastPos);
+    }
+}
+
+
+int userInterface::OnExit()
+{
+    return 0;
+}
+
+IMPLEMENT_APP(userInterface)
+
+

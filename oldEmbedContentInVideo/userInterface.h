@@ -1,0 +1,222 @@
+/*****************************************************************************
+** MOVIE PROJECT
+** Copyright (c) 2008 
+**
+** FILENAME:    userInterface.h
+** AUTHOR(S):   Sid Batra <sidbatra@cs.stanford.edu>
+** DESCRIPTION:
+** Handles the wx widget based user interface for region selection and content specification
+*****************************************************************************/
+#include <cstdlib>
+#include <cstdio>
+#include <cmath>
+#include <limits>
+#include <iostream>
+#include <string>
+#include <stdlib.h>
+#include <stdio.h>
+#include <vector>
+#include <iomanip>
+#include <map>
+
+#include <sys/types.h>
+#if defined(_WIN32)||defined(WIN32)||defined(__WIN32__)
+#include "dirent.h"
+#else
+#include <dirent.h>
+#endif
+
+
+#include "wx/wx.h"
+#include "wx/utils.h"
+#include "wx/wxprec.h"
+#include "wx/cmdline.h"
+#include "wx/aboutdlg.h"
+#include "wx/glcanvas.h"
+#include "wx/msgdlg.h"
+
+
+#include "cv.h"
+#include "cxcore.h"
+#include "highgui.h"
+
+#include "utilities.h"
+#include "frameSampler.h"
+#include "contentData.h"
+
+
+using namespace std;
+
+
+
+
+
+// wxWidgets Event Constants --------------------------------------------------
+
+enum
+{
+
+    TRACKER_FRAME_SELECTOR = wxID_HIGHEST,
+    BOX_FRAME_SELECTOR = wxID_HIGHEST + 1,
+    BOX_CONTENT_SELECTOR = wxID_HIGHEST + 2,
+
+    //FILE_NEW = wxID_HIGHEST,
+    //FILE_OPEN = wxID_HIGHEST + 1,
+    //FILE_OPEN_SEQUENCE = wxID_HIGHEST + 2,
+    //FILE_OPEN_DIRECTORY = wxID_HIGHEST + 3,
+    FILE_OPEN_VIDEO = wxID_HIGHEST + 4,
+    FILE_LOAD_TRACKS = wxID_HIGHEST + 6,
+    FILE_SAVE_TRACKS = wxID_HIGHEST + 10,
+    //FILE_SAVE = wxID_HIGHEST + 10,
+    //FILE_SAVEAS = wxID_HIGHEST + 11,
+   // FILE_IMPORT = wxID_HIGHEST + 13,
+      
+   // EDIT_FIND = wxID_HIGHEST + 100,
+   // EDIT_GOTO_FRAME = wxID_HIGHEST + 102,
+    //EDIT_GOTO_EMPTY = wxID_HIGHEST + 103,
+        
+    OPTIONS_ISBMP = wxID_HIGHEST + 200,
+    OPTIONS_ENDFRAME = wxID_HIGHEST + 202,
+    OPTIONS_REVERSEENDFRAME = wxID_HIGHEST + 203,
+    OPTIONS_DELAY = wxID_HIGHEST + 204,
+    OPTIONS_GOTO = wxID_HIGHEST + 206,
+    OPTIONS_SAVEMETA = wxID_HIGHEST + 208,
+    //OPTIONS_UNDISTORT = wxID_HIGHEST + 200,
+    //OPTIONS_LOADCALIBRATION = wxID_HIGHEST + 201,
+    //OPTIONS_GRID = wxID_HIGHEST + 210,
+   // OPTIONS_CENTROID_MODE = wxID_HIGHEST + 215,
+   // OPTIONS_DEFAULT_NAME = wxID_HIGHEST + 230,
+    //OPTIONS_DEFAULT_SIZE = wxID_HIGHEST + 240,
+
+    //HELP_OBJECT_STATS = wxID_HIGHEST + 900,
+    //HELP_KEYBOARD = wxID_HIGHEST + 910,
+    HELP_ABOUT = wxID_ABOUT,
+
+    PLAY_TIMER_ID = wxID_HIGHEST + 900
+};
+
+// Mouse Modes ----------------------------------------------------------------
+
+typedef enum {
+    MM_NONE, MM_MOVE, MM_SIZE_CORNER, MM_SIZE_WIDTH, MM_SIZE_HEIGHT
+} TMouseMode;
+
+
+// MainCanvas Class -----------------------------------------------------------
+// This is required under Linux because wxFrame doesn't get keyboard focus
+// without a child window.
+
+class MainCanvas : public wxWindow
+{
+ public:
+    MainCanvas(wxWindow *parent,
+	       wxWindowID id = wxID_ANY,
+	       const wxPoint& pos = wxDefaultPosition,
+	       const wxSize& size = wxDefaultSize,
+	       long style = wxDEFAULT_FRAME_STYLE | wxSUNKEN_BORDER | wxWANTS_CHARS,
+	       const wxString& name = wxPanelNameStr);
+    ~MainCanvas();
+
+    void on_erase_background(wxEraseEvent &event);
+    void on_paint(wxPaintEvent &event);
+    void on_size(wxSizeEvent &event);
+    void on_key(wxKeyEvent &event);
+    void on_mouse(wxMouseEvent &event);
+    void on_timer(wxTimerEvent& event);
+        
+    void displayFrame(int index); //Displays the frame at the given index
+    void loadVideo(const char *path); //Loads the video frames from the given directory
+    string getExtension();
+    void setExtension(string ext);
+
+
+ public:
+    unsigned char *_imageData;
+    wxImage _image;
+    double _scaleX, _scaleY;
+       
+    int _videoWidth;
+    int _videoHeight; 
+    int _currentFrame;
+    int _dragMode;
+    int _dragIndex;
+    vector<string> _videoFrameNames;
+    string _extension;
+    frameSampler _frameSampler;
+    vector<contentData> _contentData;
+    int _isDrawing;
+    contentData _currentContent;
+    int _delay;
+    string outputFilename;
+    string label;
+    vector<string> contentNames;
+    string contentExt;
+    
+
+    wxPoint _mousePoint;
+    TMouseMode _mouseMode;
+
+    wxTimer _playTimer;
+
+    
+
+    DECLARE_EVENT_TABLE()
+};
+
+// MainWindow Class -----------------------------------------------------------
+
+class userInterface;
+
+class MainWindow : public wxFrame
+{
+ friend class userInterface;
+
+ public:
+    MainWindow(wxWindow* parent,
+	  wxWindowID id,
+	  const wxString& title,
+	  const wxPoint& pos = wxDefaultPosition,
+	  const wxSize& size = wxDefaultSize,
+      long style = wxDEFAULT_FRAME_STYLE | wxSUNKEN_BORDER | wxWANTS_CHARS);
+    ~MainWindow();
+
+    // event callbacks
+    void on_file_menu(wxCommandEvent& event);
+    void on_edit_menu(wxCommandEvent& event);
+    void on_options_menu(wxCommandEvent& event);
+    void on_help_menu(wxCommandEvent& event);
+    void on_close(wxCloseEvent& event);
+    void on_size(wxSizeEvent &event);
+    void on_track(wxScrollEvent& event);
+    void on_boxClick(wxCommandEvent& event);
+    void on_contentBoxClick(wxCommandEvent& event);
+
+ public:
+    MainCanvas *_canvas;
+    wxSlider *_frameTracker;
+    wxListBox *_selectedFrameBox;
+    wxListBox *_contentFrameBox;
+    
+    DECLARE_EVENT_TABLE()
+};
+
+
+// *************************** userInterface *******************************
+
+class userInterface : public wxApp
+{
+ public:
+    bool OnInit();
+    void OnInitCmdLine(wxCmdLineParser& parser);
+    int OnExit();
+    void split(string& str,
+                      vector<string>& tokens,
+                      string& delimiters);
+
+};
+
+// Global Variables -----------------------------------------------------------
+
+extern MainWindow *gMainWindow;
+
+

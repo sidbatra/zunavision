@@ -1,0 +1,1 @@
+FORCE32BIT = 0        # set to 1 to compile 32-bit applications on 64-bit machines

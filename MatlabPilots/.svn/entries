@@ -1,0 +1,55 @@
+8
+
+dir
+345
+file:///afs/cs/group/movie/svn/trunk/MatlabPilots
+file:///afs/cs/group/movie/svn/trunk
+
+
+
+2009-02-23T01:56:02.803996Z
+329
+asaxena
+
+
+svn:special svn:externals svn:needs-lock
+
+
+
+
+
+
+
+
+
+
+
+3783d50d-f362-4150-b00b-32b51f82b15d
+
+read_data.m
+file
+
+
+
+
+2009-03-04T20:24:52.000000Z
+37fa4ec17c56497045c87acfb8951a0d
+2009-02-10T11:48:05.262966Z
+313
+asaxena
+
+ImageAdjuster
+dir
+
+interpretResults.m
+file
+
+
+
+
+2009-03-04T20:24:52.000000Z
+6f0c32f053a410bc86bccf8ba18481f4
+2009-02-10T11:48:05.262966Z
+313
+asaxena
+

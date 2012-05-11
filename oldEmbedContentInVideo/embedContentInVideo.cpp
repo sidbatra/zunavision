@@ -1,0 +1,243 @@
+/*****************************************************************************
+** MOVIE PROJECT
+** Copyright (c) 2008 
+**
+** FILENAME:    embedContentInVideo.cpp
+** AUTHOR(S):   Sid Batra <sidbatra@cs.stanford.edu>
+** DESCRIPTION:
+** Contains the main function which takes the source video and the content video
+** and embeds it
+*****************************************************************************/
+
+#include <cstdlib>
+#include <cassert>
+#include <iostream>
+#include <fstream>
+#include <iomanip>
+#include <vector>
+#include <string>
+
+
+#include "cv.h"
+#include "cxcore.h"
+#include "highgui.h"
+
+#include <sys/types.h>
+#if defined(_WIN32)||defined(WIN32)||defined(__WIN32__)
+#include "dirent.h"
+#else
+#include <dirent.h>
+#endif
+
+#include "svlPoint2d.h"
+#include "embedCentral.h"
+
+
+using namespace std;
+
+#define NUM_REQUIRED_PARAMETERS 2
+
+
+//Commandline instructions for application
+void usage()
+{
+    cerr << "USAGE: ./embedContentInVideo [OPTIONS] <base source folder> <video folder name> <options file location>";
+	cerr << "<source image extension> <content folder> <content image extension>" << endl;
+    cerr << "OPTIONS:" << endl
+	<< "  -skip <num>   :: number of initial frames to be skipped in the video (default: 0)" << endl
+	<< "  -debug <num>  :: outputs rectangles on the video instead of the actual content, debug 2 also shows affine plot(default:1)" << endl
+    << "  -cropFrame    :: Crops the top and bottom of the video to remove black borders " << endl
+	<< "  -smooth <num>  :: number of frames before & after with which the locations will be smoothened(default:0)" << endl
+    << "  -content <num>  :: overrides the content type of the tracj file 0 - logo , 1 - real life , 2 - widescreen image(default:0)" << endl
+    << "  -suffix <string>  :: suffix to be attached to the end of the output folder name for multiple copies(default:0)" << endl
+    << "  -track <string>  :: adds suffix to default track file name" << endl
+    << "  -input <string>  :: displays region selection box, string is the suffix used to save the input track" << endl
+	<< "  -firstFrame :: initializes a first frame debug branch, which runs program on the first frame repeatedly"<< endl
+    << "  -norepeats :: forces the application to not check for repeat frames"<< endl
+	<< endl;
+	 	 
+}
+
+#define COMMAND_LINE 1
+#ifdef COMMAND_LINE
+
+//Entry point for the application
+int main(int argc, char *argv[])
+{
+	//If no foldername is supplied flag error
+	if( argc < NUM_REQUIRED_PARAMETERS )
+	{
+		usage();
+		return -1;
+	}
+
+	int norepeats = 0; //Forces the applciation to test for reepat frames due to divx noise
+	int skipFrames = 0; //Total number of initial frames to be skipped
+	int outputMode = 0; //Holds the type of output. 0 actual content 1 outlines 2 outline + affine
+	int firstFrame = 0; //Debug mode which repeatedly runs program on the first frame
+    int smooth = 0; //Number of frames before & after with which the locations will be smoothened
+    int cropFrame = 0; //Crops the top and bottom of the videos
+    int contentOverride = -1; //Override for type of content being placed 0 - logo , 1 - real life , 2 - widescreen image
+    string suffix = ""; //Suffix added to the output directory
+    string track = ""; //Override name for the track filename
+    string inputTrack = "" ; //Suffix for the new input track
+
+	//Pointer to the arguments after the EXE name
+	char **args = argv + 1;
+
+	//Read all the options if any
+    while (--argc > NUM_REQUIRED_PARAMETERS) 
+	{		
+		if (!strcmp(*args, "-skip")) 
+		{skipFrames = atoi(*(++args)); argc--;}
+		else if (!strcmp(*args, "-firstFrame")) 
+		{firstFrame = 1;}
+        else if (!strcmp(*args, "-norepeats")) 
+        {norepeats = 1;}
+        else if (!strcmp(*args, "-cropFrame")) 
+		{cropFrame = 1;}
+		else if (!strcmp(*args, "-debug")) 
+		{outputMode= atoi(*(++args)); argc--;}
+        else if (!strcmp(*args, "-suffix")) 
+		{suffix= string(*(++args)); argc--;}
+        else if (!strcmp(*args, "-track")) 
+		{track = string(*(++args)); argc--;}
+        else if (!strcmp(*args, "-input")) 
+		{inputTrack = string(*(++args)); argc--;}
+        else if (!strcmp(*args, "-smooth")) 
+		{smooth= atoi(*(++args)); argc--;}
+        else if (!strcmp(*args, "-content")) 
+		{contentOverride = atoi(*(++args)); argc--;}
+		else {
+	    cerr << "ERROR: unrecognized option " << *args << endl;
+	    return -1;}
+						
+		args++;
+	}//WHILE
+
+
+	//Setup local variables 
+    string mainDirectory = string(args[0]); //Directory where all the videos and results are kept
+    string videoName = string(args[1]); //Base name of the video	
+    string videoDirectory = mainDirectory + "//" + videoName ;//Directory where all the videos and results are kept
+    string outputDirectory = videoDirectory + "_out" + suffix; //Directory where the resultant video frames are are to be kept
+	string extension  ;    
+	string tracksFilename = mainDirectory + "//tracks//" + videoName + track + ".txt";//Filename for the polygons to be tracked in the video;
+    
+
+	////Object of the embedCentral class which handles all the object tracking and image pasting code
+	embedCentral objectEmbed;
+	
+    
+	
+	//************* Read tracking input ***************
+
+	//Vectors for holding tracking input
+	vector<vector<svlPoint2d> > polygons;
+	vector<svlPoint2d> polygon;
+	vector<int> frameNumbers;
+    vector<int> endFrameNumbers;
+    vector<int> reverseEndFrameNumbers;
+    vector<vector<string> > content;
+    vector<int> contentTypes;
+	int totalTracks = 0;
+    char ext[5] , contentName[100];
+
+	//open input stream for tracks
+	ifstream inputStream(tracksFilename.c_str());
+
+	//Get total polygons
+	inputStream>>totalTracks>>ext;
+
+    extension = string(ext);
+
+	//Read each polygon
+	for( int i=0 ; i<totalTracks ; i++)
+	{
+		//Get total points & starting frame
+		int points = 0 , startFrame = 0 , reverseEndFrame = 0 , endFrame = 0 ,type = 0;
+        	
+		inputStream>>points>>reverseEndFrame>>startFrame>>endFrame>>contentName>>ext>>type;
+
+		frameNumbers.push_back(startFrame);
+
+        if( endFrame == -1 )
+            endFrameNumbers.push_back(INT_MAX);
+        else
+            endFrameNumbers.push_back(endFrame);
+
+        if( reverseEndFrame == -1 )
+            reverseEndFrameNumbers.push_back(INT_MAX);
+        else
+            reverseEndFrameNumbers.push_back(reverseEndFrame);
+
+        if( contentOverride == -1 )
+            contentTypes.push_back(type);
+        else
+            contentTypes.push_back(contentOverride);
+
+        string contentDirectory = mainDirectory + "//content//" + contentName;
+        content.push_back(vector<string>());
+    
+		polygon.clear();
+
+		//Read each point
+		for( int j=0 ; j<points;  j++)
+		{
+			double x =0 , y=0;
+			inputStream>>x>>y;
+			polygon.push_back(svlPoint2d(x,y));
+		}
+
+		polygons.push_back(polygon);
+
+        DIR *dir = opendir(contentDirectory.c_str());
+
+        if (dir == NULL) 
+	    {
+		    cerr << "ERROR: could not open content folder " << contentDirectory.c_str()<< endl;
+		    exit(-1);
+        }
+
+	    //Init object to read image names
+	    struct dirent *e = readdir(dir);
+    	
+	    //Iterate over each image in the folder
+        while (e != NULL) 
+	    {		
+
+		    //Load next images with needed extension
+		    if (strstr(e->d_name,ext) != NULL) 
+		    {
+    			
+			    string imageFilename = contentDirectory + string("/") + string(e->d_name);
+			    content[i].push_back(imageFilename);
+
+			    printf("\nContent Image %s",imageFilename.c_str());
+
+		    }
+    		
+		    e = readdir(dir);
+    	
+	    }//While images are being read
+	}
+
+    inputStream.close();
+	
+	cout<<"\n\nProcessing (forward in time) video frame images in folder "<<videoDirectory<<"\n";
+
+	objectEmbed.embedContentAtLocations(videoDirectory,extension,polygons,frameNumbers,
+        endFrameNumbers,content,outputDirectory,skipFrames,outputMode,contentTypes,firstFrame,smooth , norepeats , false);
+
+    cout<<"\n\nProcessing (backward in time) video frame images in folder "<<videoDirectory<<"\n";
+
+    objectEmbed.embedContentAtLocations(videoDirectory,extension,polygons,frameNumbers,
+        reverseEndFrameNumbers,content,outputDirectory,skipFrames,outputMode,contentTypes,firstFrame,smooth , norepeats , true);
+
+
+	//Default return value
+    return 0;
+}
+
+#endif
+
